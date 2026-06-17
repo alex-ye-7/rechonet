@@ -32,7 +32,7 @@ import rechonet
 @click.option("--frames", type=int, default=32) # just going to assume the same rate as video
 @click.option("--period", type=int, default=2)
 @click.option("--num_train_patients", type=int, default=None)
-@click.option("--num_workers", type=int, default=4)
+@click.option("--num_workers", type=int, default=2)
 @click.option("--batch_size", type=int, default=20)
 @click.option("--device", type=str, default=None)
 @click.option("--seed", type=int, default=0)
@@ -49,10 +49,10 @@ def run(
     lr=1e-4,
     weight_decay=1e-4,
     lr_step_period=15,
-    frames=24,
+    frames=32,
     period=2,
     num_train_patients=None,
-    num_workers=4,
+    num_workers=2,
     batch_size=20,
     device=None,
     seed=0,
@@ -96,7 +96,7 @@ def run(
         "std": std,
         "length": frames,
         "period": period,
-        "clip_must_contain_keyframes": True,
+        "clip_contain_keyframes": True,
     }
 
     dataset = {}

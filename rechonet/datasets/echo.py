@@ -12,7 +12,7 @@ import rechonet
 class Echo(torchvision.datasets.VisionDataset): 
     def __init__(self, root=None,
                 split="train", target_type="EF",
-                mean=0., std=1., # make it float?
+                mean=0., std=1., 
                 length=16, period=2,
                 max_length=250,
                 clips=1,
@@ -20,7 +20,7 @@ class Echo(torchvision.datasets.VisionDataset):
                 noise=None,
                 target_transform=None, # callable transform
                 external_test_location=None,
-                clip_must_contain_keyframes=False): # for frame task: window must span ED and ES
+                clip_contain_keyframes=False): # for frame task: window must span ED and ES
         if root is None:
             root = rechonet.config.DATA_DIR
         
@@ -40,7 +40,7 @@ class Echo(torchvision.datasets.VisionDataset):
         self.noise = noise # fraction of pixels to blacken
         self.target_transform = target_transform
         self.external_test_location = external_test_location
-        self.clip_must_contain_keyframes = clip_must_contain_keyframes
+        self.clip_contain_keyframes = clip_contain_keyframes
         
         self.fnames, self.outcome = [], [] # names might just ints
 
@@ -99,13 +99,13 @@ class Echo(torchvision.datasets.VisionDataset):
             # Keyframe task: drop videos whose ED-ES temporal gap can't fit in a single window.
             # Window spans (length-1)*period native frames; if |ED-ES| exceeds that, no window
             # can contain both labeled keyframes, so the must-contain-both constraint is infeasible.
-            if self.clip_must_contain_keyframes and self.length is not None:
+            if self.clip_contain_keyframes and self.length is not None:
                 window_span = (self.length - 1) * self.period
                 keep = [abs(self.frames[f][-1] - self.frames[f][0]) <= window_span for f in self.fnames]
                 dropped = len(self.fnames) - sum(keep)
                 if dropped > 0:
-                    print("clip_must_contain_keyframes: dropping {}/{} videos with |ED-ES| > {} native frames".format(
-                        dropped, len(self.fnames), window_span))
+                    print("Clips must contain key frames: dropping {}/{} videos with |ED-ES| > {} native frames on {}".format(
+                        dropped, len(self.fnames), window_span, self.split))
                 self.fnames = [f for (f, k) in zip(self.fnames, keep) if k]
                 self.outcome = [f for (f, k) in zip(self.outcome, keep) if k]
         
@@ -161,7 +161,7 @@ class Echo(torchvision.datasets.VisionDataset):
             c, f, h, w = video.shape
 
         # Logic for key frame task
-        if self.clip_must_contain_keyframes:
+        if self.clip_contain_keyframes:
             # Window must span both labeled keyframes. Sample start uniformly from valid range
             key = self.fnames[index]
             ed = self.frames[key][-1]
@@ -185,13 +185,13 @@ class Echo(torchvision.datasets.VisionDataset):
             if t == "Filename":
                 target.append(self.fnames[index])
             elif t == "LargeIndex":
-                if self.clip_must_contain_keyframes:
+                if self.clip_contain_keyframes:
                     # Window-relative sampled-frame index (float, in [0, length-1]).
                     target.append(np.float32((self.frames[key][-1] - start[0]) / self.period))
                 else:
                     target.append(np.int32(self.frames[key][-1]))
             elif t == "SmallIndex":
-                if self.clip_must_contain_keyframes:
+                if self.clip_contain_keyframes:
                     target.append(np.float32((self.frames[key][0] - start[0]) / self.period))
                 else:
                     target.append(np.int32(self.frames[key][0]))
