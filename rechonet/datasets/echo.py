@@ -7,8 +7,6 @@ import pandas as pd
 import numpy as np
 import skimage.draw
 import torchvision
-
-from config import DATA_DIR
 import rechonet
 
 class Echo(torchvision.datasets.VisionDataset): 
@@ -24,7 +22,7 @@ class Echo(torchvision.datasets.VisionDataset):
                 external_test_location=None,
                 clip_must_contain_keyframes=False): # for frame task: window must span ED and ES
         if root is None:
-            root = DATA_DIR
+            root = rechonet.config.DATA_DIR
         
         super().__init__(root, target_transform=target_transform)
 
