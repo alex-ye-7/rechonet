@@ -71,8 +71,8 @@ def run(
 
     # Pretrained flag is deprecated now
     # model = torchvision.models.video.__dict__[model_name](pretrained=pretrained)
-    weights= "DEFAULT" if pretrained else None
-    model = torchvision.models.video.__dict__[model_name](weights=weights)
+    default_w = "DEFAULT" if pretrained else None
+    model = torchvision.models.video.__dict__[model_name](weights=default_w)
 
     model.fc = torch.nn.Linear(model.fc.in_features, 2)
     # Bias init in middle of window for both outputs (small head-start over random init)
