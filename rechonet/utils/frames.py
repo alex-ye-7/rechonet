@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 
 import rechonet
 
-
 @click.command("keyframe")
 @click.option("--data_dir", type=click.Path(exists=True, file_okay=False), default=None)
 @click.option("--output", type=click.Path(file_okay=False), default=None)
@@ -70,8 +69,11 @@ def run(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Same backbone as video.py, but head outputs 2 scalars 
-    model = torchvision.models.video.__dict__[model_name](pretrained=pretrained)
+    # Pretrained flag is deprecated now
+    # model = torchvision.models.video.__dict__[model_name](pretrained=pretrained)
+    weights= "DEFAULT" if pretrained else None
+    model = torchvision.models.video.__dict__[model_name](weights=weights)
+
     model.fc = torch.nn.Linear(model.fc.in_features, 2)
     # Bias init in middle of window for both outputs (small head-start over random init)
     model.fc.bias.data[:] = 0.5
