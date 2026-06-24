@@ -38,9 +38,9 @@ class FrameNet(torch.nn.Module):
 
 # Helper functions
 
-# yhat and y are sampled-frame indicies
-def mae_native(yhat, y, length, period):
-    err = np.abs(yhat - y) * (length - 1) * period   # back to native frames
+# yhat and y are sampled-frame indicies, need to multiply by period
+def mae_native(yhat, y, period):
+    err = np.abs(yhat - y) * period   # back to native frames
     return err[:, 0].mean(), err[:, 1].mean()        
 
 # both (B,T)
@@ -176,7 +176,7 @@ def run(
                     pin_memory=(device.type == "cuda"), drop_last=(phase == "train"))
 
                 loss, yhat, y = rechonet.utils.frames.run_epoch(model, dataloader, phase == "train", optim=optim, device=device)
-                es_mae, ed_mae = mae_native(yhat, y, frames, period)
+                es_mae, ed_mae = mae_native(yhat, y, period)
 
                 f.write("{},{},{},{},{},{}\n".format(
                     epoch, phase, loss, es_mae, ed_mae, time.time() - start_time))
@@ -214,7 +214,7 @@ def run(
                     rechonet.datasets.Echo(root=data_dir, split=split, **kwargs),
                     batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=(device.type == "cuda"))
                 loss, yhat, y = rechonet.utils.frames.run_epoch(model, dataloader, False, None, device=device)
-                es_mae, ed_mae = mae_native(yhat, y, frames, period)
+                es_mae, ed_mae = mae_native(yhat, y, period)
                 f.write("{} ES MAE {:.2f} | ED MAE {:.2f}\n".format(split, es_mae, ed_mae))
                 f.flush()
                 print("{} ES MAE {:.2f} | ED MAE {:.2f}\n".format(split, es_mae, ed_mae)) # print fpr me
