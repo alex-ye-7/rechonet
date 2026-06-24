@@ -1,5 +1,4 @@
-# Training and running a model that picks end-diastolic (ED) and end-systolic (ES) frames from clip
-# Regression implementation, head predicts two scalars 
+# Model that picks end-diastolic (ED) and end-systolic (ES) frames direct from video
 
 import math
 import os
@@ -14,13 +13,57 @@ import matplotlib.pyplot as plt
 
 import rechonet
 
+# Custom ResNet + LSTM 
+class FrameNet(torch.nn.Module):
+    def __init__(self, backbone="resnet18", pretrained=True, hidden=128):
+        super().__init__()
+        enc = torchvision.models.video.__dict__[backbone](weights="DEFAULT" if pretrained else None)
+        self.feat_dim = enc.fc.in_features
+        enc.fc = torch.nn.Identity() # remove classification head -> turn temporal
+        self.enc = enc
+
+        self.temporal = torch.nn.LSTM(self.feat_dim, hidden, batch_first=True, bidirectional=True)
+        head_in = 2 * hidden
+
+        self.head = torch.nn.Conv1d(head_in, 2, kernel_size=1) # fully connected layer, two values
+
+    def forward(self, x):
+        B, C, T, H, W = x.shape
+        x = x.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W) # each frame is a seperate image
+        feats = self.enc(x).view(B, T, self.feat_dim) # (B, T, feat_dim)
+        seq, _ = self.temporal(feats) # (B, T, 2*hidden)
+        seq = seq.transpose(1,2) # (B, 2*hidden, T)
+        logits = self.head(seq) # (B, 2, T)
+        return logits.transpose(1, 2) # (B, T, 2) - two values per frame
+
+# Helper functions
+
+# yhat and y are sampled-frame indicies
+def mae_native(yhat, y, length, period):
+    err = np.abs(yhat - y) * (length - 1) * period   # back to native frames
+    return err[:, 0].mean(), err[:, 1].mean()        
+
+# both (B,T)
+# Target is a Gaussian shape but not distribution yet
+def soft_ce_loss(logits, target): 
+    target = target / (target.sum(dim=1, keepdim=True) + 1e-8)
+    logp = torch.nn.functional.log_softmax(logits, dim=1) # across time
+    return -(target * logp).sum(dim=1).mean()
+
+# turn (B,T) -> (B,)
+# Expected value formula: find weighted average frame over distribution
+def soft_argmax(logits):
+    T = logits.shape[1]
+    prob = torch.softmax(logits, dim=1)
+    pos = torch.arange(T, device=logits.device, dtype=prob.dtype)
+    return (prob * pos).sum(dim=1)
+    
+
+# CLI
 @click.command("keyframe")
 @click.option("--data_dir", type=click.Path(exists=True, file_okay=False), default=None)
 @click.option("--output", type=click.Path(file_okay=False), default=None)
-@click.option("--model_name", type=click.Choice(
-    sorted(name for name in torchvision.models.video.__dict__
-           if name.islower() and not name.startswith("__") and callable(torchvision.models.video.__dict__[name]))),
-           default="r2plus1d_18")
+@click.option("--backbone", type=str, default="resnet18")
 @click.option("--pretrained/--random", default=True)
 @click.option("--weights", type=click.Path(exists=True, dir_okay=False), default=None)
 @click.option("--run_test/--skip_test", default=False)
@@ -28,8 +71,10 @@ import rechonet
 @click.option("--lr", type=float, default=1e-4)
 @click.option("--weight_decay", type=float, default=1e-4)
 @click.option("--lr_step_period", type=int, default=15)
-@click.option("--frames", type=int, default=32) # just going to assume the same rate as video
+@click.option("--frames", type=int, default=32) 
 @click.option("--period", type=int, default=2)
+@click.option("--sigma", type=float, default=1.5)
+@click.option("--hidden", type=int, default=128)
 @click.option("--num_train_patients", type=int, default=None)
 @click.option("--num_workers", type=int, default=2)
 @click.option("--batch_size", type=int, default=20)
@@ -38,8 +83,7 @@ import rechonet
 def run(
     data_dir=None,
     output=None,
-
-    model_name="r2plus1d_18",
+    backbone="resnet18",
     pretrained=True,
     weights=None,
 
@@ -50,6 +94,8 @@ def run(
     lr_step_period=15,
     frames=32,
     period=2,
+    sigma=1.5,
+    hidden=128,
     num_train_patients=None,
     num_workers=2,
     batch_size=20,
@@ -62,21 +108,14 @@ def run(
 
     # Default output dir
     if output is None:
-        output = os.path.join("output", "keyframes", "{}_{}_{}_{}".format(model_name, frames, period, "pretrained" if pretrained else "random"))
+        output = os.path.join("output", "keyframes", "{}_{}_{}_{}".format(backbone, frames, period, "pretrained" if pretrained else "random"))
     os.makedirs(output, exist_ok=True)
 
     # Device
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Pretrained flag is deprecated now
-    # model = torchvision.models.video.__dict__[model_name](pretrained=pretrained)
-    default_w = "DEFAULT" if pretrained else None
-    model = torchvision.models.video.__dict__[model_name](weights=default_w)
-
-    model.fc = torch.nn.Linear(model.fc.in_features, 2)
-    # Bias init in middle of window for both outputs (small head-start over random init)
-    model.fc.bias.data[:] = 0.5
+    model = FrameNet(backbone=backbone, pretrained=pretrained, hidden=hidden)
     if device.type == "cuda":
         model = torch.nn.DataParallel(model)
     model.to(device)
@@ -90,15 +129,15 @@ def run(
         lr_step_period = math.inf
     scheduler = torch.optim.lr_scheduler.StepLR(optim, lr_step_period)
 
-    # Same mean and std, and then 
     mean, std = rechonet.utils.get_mean_and_std(rechonet.datasets.Echo(root=data_dir, split="train"))
     kwargs = {
-        "target_type": ["SmallIndex", "LargeIndex"], # ES first, ED second
+        "target_type": ["SmallHeatmap", "LargeHeatmap", "SmallIndex", "LargeIndex"], # ES first, ED second
         "mean": mean,
         "std": std,
         "length": frames,
         "period": period,
         "clip_contain_keyframes": True,
+        "heatmap_std": sigma,
     }
 
     dataset = {}
@@ -135,8 +174,7 @@ def run(
                     ds, batch_size=batch_size, num_workers=num_workers, shuffle=True,
                     pin_memory=(device.type == "cuda"), drop_last=(phase == "train"))
 
-                loss, yhat, y = run_epoch(model, dataloader, phase == "train", optim=optim, 
-                                          device=device, length=frames)
+                loss, yhat, y = rechonet.utils.frames.run_epoch(model, dataloader, phase == "train", optim=optim, device=device)
                 es_mae, ed_mae = mae_native(yhat, y, frames, period)
 
                 f.write("{},{},{},{},{},{}\n".format(
@@ -174,21 +212,27 @@ def run(
                 dataloader = torch.utils.data.DataLoader(
                     rechonet.datasets.Echo(root=data_dir, split=split, **kwargs),
                     batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=(device.type == "cuda"))
-                loss, yhat, y = rechonet.utils.frames.run_epoch(model, dataloader, False, None, device=device, length=frames)
+                loss, yhat, y = rechonet.utils.frames.run_epoch(model, dataloader, False, None, device=device)
                 es_mae, ed_mae = mae_native(yhat, y, frames, period)
                 f.write("{} ES MAE {:.2f} | ED MAE {:.2f}\n".format(split, es_mae, ed_mae))
-
+                f.flush()
+                print("{} ES MAE {:.2f} | ED MAE {:.2f}\n".format(split, es_mae, ed_mae)) # print fpr me
                 yhat_f = yhat * (frames - 1) * period   # native-frame positions
                 y_f  = y  * (frames - 1) * period
                 for k, name in [(0, "ES"), (1, "ED")]:
                     plt.scatter(y_f[:, k], yhat_f[:, k], s=2)   # true vs predicted
                     plt.plot([y_f[:,k].min(), y_f[:,k].max()], [y_f[:,k].min(), y_f[:,k].max()])  # y=x
+                    plt.xlabel("true frame")
+                    plt.ylabel("predicted frame")
                     plt.savefig(os.path.join(output, "{}_{}.pdf".format(split, name)))
                     plt.clf()
 
 
-def run_epoch(model, dataloader, train, optim, device, length=32):
-    """One epoch of train/eval for the keyframe regressor."""
+def run_epoch(model, dataloader, train, optim, device):
+    """
+    One epoch of train/eval for the keyframe regressor
+    Returns (avg_loss, yhat, y) where (N,2) arrays in sampled frames 
+    """
     model.train(train)
 
     total_loss = 0.
@@ -198,35 +242,32 @@ def run_epoch(model, dataloader, train, optim, device, length=32):
     with torch.set_grad_enabled(train):
         with tqdm.tqdm(total=len(dataloader)) as pbar:
             for (X, targets) in dataloader:
-                # targets is a tuple (es_idx, ed_idx), each tensor of shape (B,), in sampled-frame units
-                es_idx, ed_idx = targets
-                # Normalize to [0, 1] across the sampled window, as length and period could change
-                yb = torch.stack([es_idx.float() / (length-1), 
-                                 ed_idx.float() / (length-1)], dim=1).to(device) # (B, 2)
+                es_hm, ed_hm, es_idx, ed_idx = targets # (B,T), (B,T), (B,), (B,)
+                
                 X = X.to(device)
-
-                yhat_b = model(X) # (B, 2)
-                loss = torch.nn.functional.smooth_l1_loss(yhat_b, yb)
+                logits = model(X) # (B,T,2)
+                loss = soft_ce_loss(logits[...,0], es_hm.to(device)) + soft_ce_loss(logits[...,1], ed_hm.to(device))
 
                 if train:
                     optim.zero_grad()
                     loss.backward()
                     optim.step()
 
-                yhat.append(yhat_b.to("cpu").detach().numpy())
-                y.append(yb.to("cpu").detach().numpy())
+                # Extract predicted frame from distribution
+                pred_es = soft_argmax(logits[...,0]).to("cpu").detach().numpy()
+                pred_ed = soft_argmax(logits[...,1]).to("cpu").detach().numpy()
+
+                # Build up the eventual concat, ensure es/ed are saved together for one sample
+                yhat.append(np.stack([pred_es, pred_ed], axis=1))
+                y.append(np.stack([es_idx.numpy(), ed_idx.numpy()], axis=1))
 
                 total_loss += loss.item() * X.size(0)
                 n += X.size(0)
-
                 pbar.set_postfix_str("loss {:.4f}".format(total_loss / n))
                 pbar.update()
 
     return total_loss / n, np.concatenate(yhat), np.concatenate(y)
 
-def mae_native(yhat, y, length, period):
-    err = np.abs(yhat - y) * (length - 1) * period   # back to native frames
-    return err[:, 0].mean(), err[:, 1].mean()         # (ES_MAE, ED_MAE)
 
 if __name__ == "__main__":
     run()
