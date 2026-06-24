@@ -20,7 +20,8 @@ class Echo(torchvision.datasets.VisionDataset):
                 noise=None,
                 target_transform=None, # callable transform
                 external_test_location=None,
-                clip_contain_keyframes=False): # for frame task: window must span ED and ES
+                clip_contain_keyframes=False,
+                heatmap_std=1.5):
         if root is None:
             root = rechonet.config.DATA_DIR
         
@@ -41,8 +42,8 @@ class Echo(torchvision.datasets.VisionDataset):
         self.target_transform = target_transform
         self.external_test_location = external_test_location
         self.clip_contain_keyframes = clip_contain_keyframes
-        
-        self.fnames, self.outcome = [], [] # names might just ints
+        self.heatmap_std = heatmap_std
+        self.fnames, self.outcome = [], [] 
 
         if self.split == "EXTERNAL_TEST":
             self.fnames = sorted(os.listdir(self.external_test_location))
@@ -195,6 +196,12 @@ class Echo(torchvision.datasets.VisionDataset):
                     target.append(np.float32((self.frames[key][0] - start[0]) / self.period))
                 else:
                     target.append(np.int32(self.frames[key][0]))
+            elif t in ("LargeHeatmap", "SmallHeatmap"): 
+                kf = self.frames[key][-1] if t == "LargeHeatmap" else self.frames[key][0]
+                center = (kf - start[0]) / self.period 
+                pos = np.arange(length, dtype=np.float32) # each frame of the clip
+                hm = np.exp(-0.5 * ((pos - center) / self.heatmap_std) ** 2).astype(np.float32) # gaussian
+                target.append(hm)
             elif t == "LargeFrame":
                 target.append(video[:, self.frames[key][-1],:,:])
             elif t == "SmallFrame":
