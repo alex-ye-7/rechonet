@@ -89,7 +89,7 @@ def run(
 
     run_test=False,
     num_epochs=45,
-    lr=1e-4,
+    lr=1e-3,
     weight_decay=1e-4,
     lr_step_period=15,
     frames=32,
@@ -124,7 +124,8 @@ def run(
         checkpoint = torch.load(weights)
         model.load_state_dict(checkpoint["state_dict"])
 
-    optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=weight_decay)
+    #optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=weight_decay)
+    optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     if lr_step_period is None:
         lr_step_period = math.inf
     scheduler = torch.optim.lr_scheduler.StepLR(optim, lr_step_period)
