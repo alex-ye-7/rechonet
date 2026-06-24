@@ -17,7 +17,7 @@ import rechonet
 class FrameNet(torch.nn.Module):
     def __init__(self, backbone="resnet18", pretrained=True, hidden=128):
         super().__init__()
-        enc = torchvision.models.video.__dict__[backbone](weights="DEFAULT" if pretrained else None)
+        enc = torchvision.models.__dict__[backbone](weights="DEFAULT" if pretrained else None)
         self.feat_dim = enc.fc.in_features
         enc.fc = torch.nn.Identity() # remove classification head -> turn temporal
         self.enc = enc
