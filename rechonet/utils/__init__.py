@@ -19,7 +19,7 @@ from . import frames
 # dataset[i][0] is expected to be the i-th video in the dataset
 # should be a Tensor of (channels=3, frames, height, width)
 def get_mean_and_std(dataset: torch.utils.data.Dataset, samples: int = 128, 
-                     batch_size: int = 8, num_workers: int = 4):
+                     batch_size: int = 8, num_workers: int = 2):
     if samples is not None and len(dataset) > samples: # sample from the dataset
         indices = np.random.choice(len(dataset), samples, replace=False)
         dataset = torch.utils.data.Subset(dataset, indices) 
@@ -29,7 +29,7 @@ def get_mean_and_std(dataset: torch.utils.data.Dataset, samples: int = 128,
     s1 = 0.  # sum of elements along channels (ends up np.array dim (channels,) )
     s2 = 0.  # sum of squares of elements along channels (same dim as above)
 
-    for x, *_ in tqdm.tqdm(dataloader): # x is (batch, 3, frames, h, w)
+    for x, *_ in tqdm.tqdm(dataloader, desc="Normalization processing"): # x is (batch, 3, frames, h, w)
         # Flatten every pixel from every frame of every video in the batch, grouped by channel
         x = x.transpose(0,1).contiguous().view(3, -1) # bring 3 channels to front
         n += x.shape[1] # 1 position becomes batch*h*w

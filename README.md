@@ -12,7 +12,3 @@ beat-to-beat assessment of cardiac function." *Nature* 581, 252–257 (2020).
 Code: https://github.com/echonet/dynamic
 
 This code contains the original license. 
-
-
-## TODO:
-- Pretrained flag is depreicated, need to use weights argument to load model dynamically 
