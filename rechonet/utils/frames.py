@@ -21,11 +21,12 @@ class FrameNet(torch.nn.Module):
         self.feat_dim = enc.fc.in_features
         enc.fc = torch.nn.Identity() # remove classification head -> turn temporal
         self.enc = enc # Store the backbone
+        self.t_arch = temporal
 
-        if temporal == "lstm":
+        if self.t_arch == "lstm":
             self.temporal = torch.nn.LSTM(self.feat_dim, hidden, batch_first=True, bidirectional=True)
             head_in = 2 * hidden # bidirectional doubles output dimension (concatenates forward/backward)
-        elif temporal == 'tcn':
+        elif self.t_arch == 'tcn':
             self.temporal = torch.nn.Sequential(
                 torch.nn.Conv1d(self.feat_dim, hidden, kernel_size=3, padding=1, dilation=1),
                 torch.nn.ReLU(),
@@ -45,7 +46,7 @@ class FrameNet(torch.nn.Module):
         x = x.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W) # each frame is a seperate image, combine batch and time
         feats = self.enc(x).view(B, T, self.feat_dim) # (B, T, F) 
 
-        if self.temporal == "lstm": # LSTM expects (B, T, feat_dim)
+        if self.t_arch == "lstm": # LSTM expects (B, T, feat_dim)
             seq, _ = self.temporal(feats) # (B, T, 2H)
             seq = seq.transpose(1,2) # (B, 2H, T)
         else: # Conv1d expects (B, C/feat_dim, T/length)
