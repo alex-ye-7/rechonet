@@ -15,24 +15,42 @@ import rechonet
 
 # Custom ResNet + LSTM 
 class FrameNet(torch.nn.Module):
-    def __init__(self, backbone="resnet18", pretrained=True, hidden=128):
+    def __init__(self, backbone="resnet18", temporal="lstm", pretrained=True, hidden=128):
         super().__init__()
         enc = torchvision.models.__dict__[backbone](weights="DEFAULT" if pretrained else None)
         self.feat_dim = enc.fc.in_features
         enc.fc = torch.nn.Identity() # remove classification head -> turn temporal
-        self.enc = enc
+        self.enc = enc # Store the backbone
 
-        self.temporal = torch.nn.LSTM(self.feat_dim, hidden, batch_first=True, bidirectional=True)
-        head_in = 2 * hidden
+        if temporal == "lstm":
+            self.temporal = torch.nn.LSTM(self.feat_dim, hidden, batch_first=True, bidirectional=True)
+            head_in = 2 * hidden # bidirectional doubles output dimension (concatenates forward/backward)
+        elif temporal == 'tcn':
+            self.temporal = torch.nn.Sequential(
+                torch.nn.Conv1d(self.feat_dim, hidden, kernal_size=3, padding=1, dilation=1),
+                torch.nn.ReLU(),
+                torch.nn.Conv1d(hidden, hidden, kernal_size=3, padding=2, dilation=2),
+                torch.nn.ReLU(),
+                torch.nn.Conv1d(hidden, hidden, kernal_size=3, padding=4, dilation=4),
+                torch.nn.ReLU()
+            )
+            head_in = hidden
+        else:
+            raise ValueError("temporal arch must be lstm or tcn, got {}".format(temporal))
 
         self.head = torch.nn.Conv1d(head_in, 2, kernel_size=1) # fully connected layer, two values
 
     def forward(self, x):
         B, C, T, H, W = x.shape
-        x = x.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W) # each frame is a seperate image
-        feats = self.enc(x).view(B, T, self.feat_dim) # (B, T, feat_dim)
-        seq, _ = self.temporal(feats) # (B, T, 2*hidden)
-        seq = seq.transpose(1,2) # (B, 2*hidden, T)
+        x = x.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W) # each frame is a seperate image, combine batch and time
+        feats = self.enc(x).view(B, T, self.feat_dim) # (B, T, F) 
+
+        if self.temporal == "lstm": # LSTM expects (B, T, feat_dim)
+            seq, _ = self.temporal(feats) # (B, T, 2H)
+            seq = seq.transpose(1,2) # (B, 2H, T)
+        else: # Conv1d expects (B, C/feat_dim, T/length)
+            seq = self.temporal(feats.transpose(1,2)) # (B,H,T)
+
         logits = self.head(seq) # (B, 2, T)
         return logits.transpose(1, 2) # (B, T, 2) - two values per frame
 
@@ -64,6 +82,7 @@ def soft_argmax(logits):
 @click.option("--data_dir", type=click.Path(exists=True, file_okay=False), default=None)
 @click.option("--output", type=click.Path(file_okay=False), default=None)
 @click.option("--backbone", type=str, default="resnet18")
+@click.option("--temporal", type=click.Choice(["lstm", "tcn"]), default="lstm")
 @click.option("--pretrained/--random", default=True)
 @click.option("--weights", type=click.Path(exists=True, dir_okay=False), default=None)
 @click.option("--run_test/--skip_test", default=False)
@@ -84,6 +103,7 @@ def run(
     data_dir=None,
     output=None,
     backbone="resnet18",
+    temporal="lstm",
     pretrained=True,
     weights=None,
 
@@ -108,14 +128,14 @@ def run(
 
     # Default output dir
     if output is None:
-        output = os.path.join("output", "keyframes", "{}_{}_{}_{}".format(backbone, frames, period, "pretrained" if pretrained else "random"))
+        output = os.path.join("output", "keyframes", "{}_{}_{}_{}".format(backbone, temporal, frames, period))
     os.makedirs(output, exist_ok=True)
 
     # Device
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = FrameNet(backbone=backbone, pretrained=pretrained, hidden=hidden)
+    model = FrameNet(backbone=backbone, temporal=temporal, pretrained=pretrained, hidden=hidden)
     if device.type == "cuda":
         model = torch.nn.DataParallel(model)
     model.to(device)
@@ -217,9 +237,9 @@ def run(
                 es_mae, ed_mae = mae_native(yhat, y, period)
                 f.write("{} ES MAE {:.2f} | ED MAE {:.2f}\n".format(split, es_mae, ed_mae))
                 f.flush()
-                print("{} ES MAE {:.2f} | ED MAE {:.2f}\n".format(split, es_mae, ed_mae)) # print fpr me
-                yhat_f = yhat * (frames - 1) * period   # native-frame positions
-                y_f  = y  * (frames - 1) * period
+                print("{} ES MAE {:.2f} | ED MAE {:.2f}\n".format(split, es_mae, ed_mae))
+                yhat_f = yhat * period   # native-frame positions
+                y_f  = y * period
                 for k, name in [(0, "ES"), (1, "ED")]:
                     plt.scatter(y_f[:, k], yhat_f[:, k], s=2)   # true vs predicted
                     plt.plot([y_f[:,k].min(), y_f[:,k].max()], [y_f[:,k].min(), y_f[:,k].max()])  # y=x
