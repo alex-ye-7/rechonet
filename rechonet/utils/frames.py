@@ -27,11 +27,11 @@ class FrameNet(torch.nn.Module):
             head_in = 2 * hidden # bidirectional doubles output dimension (concatenates forward/backward)
         elif temporal == 'tcn':
             self.temporal = torch.nn.Sequential(
-                torch.nn.Conv1d(self.feat_dim, hidden, kernal_size=3, padding=1, dilation=1),
+                torch.nn.Conv1d(self.feat_dim, hidden, kernel_size=3, padding=1, dilation=1),
                 torch.nn.ReLU(),
-                torch.nn.Conv1d(hidden, hidden, kernal_size=3, padding=2, dilation=2),
+                torch.nn.Conv1d(hidden, hidden, kernel_size=3, padding=2, dilation=2),
                 torch.nn.ReLU(),
-                torch.nn.Conv1d(hidden, hidden, kernal_size=3, padding=4, dilation=4),
+                torch.nn.Conv1d(hidden, hidden, kernel_size=3, padding=4, dilation=4),
                 torch.nn.ReLU()
             )
             head_in = hidden
